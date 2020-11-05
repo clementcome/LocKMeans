@@ -7,6 +7,7 @@ class LocKMeans:
     """
     Implements a modified K-Means algorithm with size-constraints
     on the number of elements of each cluster
+    This size constraint is enforced only during fitting
 
     Parameters:
     -----------
@@ -99,21 +100,23 @@ class LocKMeans:
     def predict(self, X, centers=None):
         if centers is None:
             centers = self.cluster_centers_
-        list_cluster_size = [0 for _ in range(self.n_clusters_)]
+        # list_cluster_size = [0 for _ in range(self.n_clusters_)]
         dist_data_centers = cdist(X, centers)
-        sort_index_data_centers = np.argsort(np.min(dist_data_centers, axis=1))
+        # sort_index_data_centers = np.argsort(np.min(dist_data_centers, axis=1))
         labels = np.repeat(-1, X.shape[0])
-        for idx in sort_index_data_centers:
-            visited_cluster = 0
-            while visited_cluster < self.n_clusters_:
-                cluster_idx = np.argmin(dist_data_centers[idx])
-                if list_cluster_size[cluster_idx] < self.cluster_size_[cluster_idx]:
-                    labels[idx] = cluster_idx
-                    list_cluster_size[cluster_idx] += 1
-                    break
-                elif dist_data_centers[idx, cluster_idx] == np.inf:
-                    break
-                else:
-                    dist_data_centers[:, cluster_idx] = np.inf
-                visited_cluster += 1
+        for i, arr_dist in enumerate(dist_data_centers):
+            labels[i] = np.argmin(arr_dist)
+        # for idx in sort_index_data_centers:
+        #     visited_cluster = 0
+        #     while visited_cluster < self.n_clusters_:
+        #         cluster_idx = np.argmin(dist_data_centers[idx])
+        #         if list_cluster_size[cluster_idx] < self.cluster_size_[cluster_idx]:
+        #             labels[idx] = cluster_idx
+        #             list_cluster_size[cluster_idx] += 1
+        #             break
+        #         elif dist_data_centers[idx, cluster_idx] == np.inf:
+        #             break
+        #         else:
+        #             dist_data_centers[:, cluster_idx] = np.inf
+        #         visited_cluster += 1
         return labels
