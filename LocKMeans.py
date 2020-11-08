@@ -2,6 +2,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from tqdm import tqdm
 from sklearn.cluster import KMeans
+import nmslib
 
 
 class LocKMeans:
@@ -19,7 +20,14 @@ class LocKMeans:
         if array (n_clusters, num_features), it will be used as the initial centers for the algorithm
     """
 
-    def __init__(self, n_clusters=8, cluster_size=None, max_iter=300, hide_pbar=False):
+    def __init__(
+        self,
+        n_clusters=8,
+        cluster_size=None,
+        truncate_cluster=2,
+        max_iter=300,
+        hide_pbar=False,
+    ):
         self.n_clusters_ = n_clusters
         if type(cluster_size) == np.ndarray:
             self.cluster_size_ = cluster_size
@@ -27,6 +35,7 @@ class LocKMeans:
             self.cluster_size_ = np.repeat(cluster_size, n_clusters)
         else:
             self.cluster_size_ = None
+        self.truncate_cluster_ = truncate_cluster
         self.max_iter_ = max_iter
         self.cluster_centers_ = None
         self.hide_pbar_ = hide_pbar
@@ -70,32 +79,42 @@ class LocKMeans:
         max_iter = self.max_iter_
         if init_mode == "kmeans":
             max_iter = max_iter // 2
+            self.visited_cluster_through_iterations_ = np.zeros(
+                (self.max_iter_ // 2, n_samples)
+            )
 
         for i in tqdm(range(max_iter), disable=self.hide_pbar_):
+            # Definition of the similarity search component
+            index_search = nmslib.init(space="l2")
+            index_search.addDataPointBatch(self.cluster_centers_.astype(np.float32))
+            index_search.createIndex()
+
             list_points_in_clusters = [[] for _ in range(self.n_clusters_)]
             list_cluster_size = [0 for _ in range(self.n_clusters_)]
             new_labels = np.repeat(-1, X.shape[0])
-            dist_data_centers = cdist(copy_X, self.cluster_centers_)
+            knn_result = index_search.knnQueryBatch(
+                copy_X.astype(np.float32), k=self.truncate_cluster_, num_threads=4
+            )
+            idx_data_centers, dist_data_centers = list(zip(*knn_result))
+            idx_data_centers = np.array(idx_data_centers)
+            dist_data_centers = np.array(dist_data_centers)
             sort_index_data_centers = np.argsort(
                 np.min(dist_data_centers, axis=1), kind="stable"
             )
+            idx_data_centers = idx_data_centers[sort_index_data_centers]
             dist_data_centers = dist_data_centers[sort_index_data_centers]
             copy_X = copy_X[sort_index_data_centers]
             original_index = original_index[sort_index_data_centers]
             for idx in range(len(dist_data_centers)):
                 visited_cluster = 0
-                while visited_cluster < self.n_clusters_:
-                    cluster_idx = np.argmin(dist_data_centers[idx])
+                while visited_cluster < self.truncate_cluster_:
+                    cluster_idx = idx_data_centers[idx, visited_cluster]
                     visited_cluster += 1
                     if list_cluster_size[cluster_idx] < self.cluster_size_[cluster_idx]:
                         list_points_in_clusters[cluster_idx].append(copy_X[idx])
                         list_cluster_size[cluster_idx] += 1
                         new_labels[original_index[idx]] = cluster_idx
                         break
-                    elif dist_data_centers[idx, cluster_idx] == np.inf:
-                        break
-                    else:
-                        dist_data_centers[:, cluster_idx] = np.inf
                 self.visited_cluster_through_iterations_[
                     i, original_index[idx]
                 ] = visited_cluster
@@ -113,12 +132,25 @@ class LocKMeans:
 
             self.labels_ = new_labels
             self.cluster_centers_ = new_centers
+            self.index_search_ = nmslib.init(space="l2")
+            self.index_search_.addDataPointBatch(self.cluster_centers_)
+            self.index_search_.createIndex()
 
-    def predict(self, X, centers=None):
-        if centers is None:
-            centers = self.cluster_centers_
-        dist_data_centers = cdist(X, centers)
-        labels = np.repeat(-1, X.shape[0])
-        for i, arr_dist in enumerate(dist_data_centers):
-            labels[i] = np.argmin(arr_dist)
-        return labels
+    def predict(self, X):
+        knn_result = self.index_search_.knnQueryBatch(X, k=1, num_threads=4)
+        idx_data_centers, dist_data_centers = list(zip(*knn_result))
+        idx_data_centers = np.array(idx_data_centers).reshape(-1)
+        # dist_data_centers = np.array(dist_data_centers)
+        # labels = np.repeat(-1, X.shape[0])
+        # for i, arr_dist in enumerate(dist_data_centers):
+        #     labels[i] = np.argmin(arr_dist)
+        return idx_data_centers
+
+
+# np.random.seed(42)
+# n_cluster = 100
+# n_estimation = 100
+# X = np.random.randn(n_cluster * n_estimation, 2).astype(np.float32)
+
+# lkm = LocKMeans(n_clusters=n_cluster, cluster_size=n_estimation, max_iter=100)
+# lkm.fit(X, init_mode="random")
