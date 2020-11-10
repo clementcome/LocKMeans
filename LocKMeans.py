@@ -289,11 +289,37 @@ class LocKMeans:
         self.index_search_.addDataPointBatch(self.cluster_centers_.astype(np.float32))
         self.index_search_.createIndex()
 
-    def predict(self, X):
+    def predict(self, X, limit_cluster_size=False):
         knn_result = self.index_search_.knnQueryBatch(X, k=1, num_threads=4)
         idx_data_centers, dist_data_centers = list(zip(*knn_result))
-        idx_data_centers = np.array(idx_data_centers).reshape(-1)
-        return idx_data_centers
+        idx_data_centers = np.array(idx_data_centers)
+        dist_data_centers = np.array(dist_data_centers)
+        list_cluster_size = np.zeros(self.n_clusters_)
+        if limit_cluster_size:
+            labels = np.repeat(-1, X.shape[0])
+            order = np.argsort(np.min(dist_data_centers, axis=1))
+            for point_index in tqdm(order):
+                cluster_idx = idx_data_centers[point_index, 0]
+                if list_cluster_size[cluster_idx] < self.cluster_size_[cluster_idx]:
+                    list_cluster_size[cluster_idx] += 1
+                    labels[point_index] = cluster_idx
+                else:
+                    knn_point = self.index_search_.knnQuery(
+                        X[point_index], k=self.n_clusters_
+                    )
+                    idx_nn, _ = list(zip(*knn_result))
+                    for cluster_idx in idx_nn:
+                        if (
+                            list_cluster_size[cluster_idx]
+                            < self.cluster_size_[cluster_idx]
+                        ):
+                            list_cluster_size[cluster_idx] += 1
+                            labels[point_index] = cluster_idx
+                            break
+            return labels
+        else:
+            idx_data_centers = np.array(idx_data_centers).reshape(-1)
+            return idx_data_centers
 
 
 # np.random.seed(42)
@@ -303,3 +329,4 @@ class LocKMeans:
 
 # lkm = LocKMeans(n_clusters=n_cluster, cluster_size=n_estimation, max_iter=100)
 # lkm.fit(X, init_mode="random")
+# lkm.predict(X, limit_cluster_size=True)
