@@ -28,6 +28,7 @@ class LocKMeans:
         truncate_cluster=2,
         max_iter=300,
         hide_pbar=False,
+        compute_loss=False,
     ):
         self.n_clusters_ = n_clusters
         if type(cluster_size) == np.ndarray:
@@ -40,6 +41,26 @@ class LocKMeans:
         self.max_iter_ = max_iter
         self.cluster_centers_ = None
         self.hide_pbar_ = hide_pbar
+        self.compute_loss_ = compute_loss
+        if self.compute_loss_:
+            self.loss_history_ = np.zeros(max_iter)
+
+    def compute_std(self, labels=None, remove_outlier=True):
+        if labels is None:
+            labels = self.labels_
+        if remove_outlier:
+            true_labels = labels[np.where(labels > -1)]
+        else:
+            true_labels = labels.copy()
+        unique_labels, counts = np.unique(true_labels, return_counts=True)
+        n_labels = unique_labels.shape[0]
+        if remove_outlier:
+            total_counts = np.zeros(self.n_clusters_)
+        else:
+            total_counts = np.zeros(self.n_clusters_ + 1)
+
+        total_counts[:n_labels] = counts
+        return np.std(total_counts)
 
     def initial_centers(self, X: np.ndarray, init_mode: str) -> np.ndarray:
         """
@@ -251,6 +272,11 @@ class LocKMeans:
             self.visited_cluster_through_iteration_list_[
                 i
             ] = visited_cluster_through_iteration
+
+            if self.compute_loss_:
+                self.loss_history_[i] = self.compute_std(
+                    new_labels, remove_outlier=False
+                )
 
             # If prediction are not changing between 2 iterations, we stop the algorithm
             if (new_labels == self.labels_).all():
