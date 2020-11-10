@@ -40,6 +40,37 @@ class LocKMeans:
         self.cluster_centers_ = None
         self.hide_pbar_ = hide_pbar
 
+    def initial_centers(self, X: np.ndarray, init_mode: str) -> np.ndarray:
+        """
+        Initialize centers for fitting LocKMeans according to 
+        the mode of initialization
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Array to fit
+        init_mode : str
+            Mode of initialization
+
+        Returns
+        -------
+        np.ndarray
+            Initial centers
+        """
+        if init_mode == "kmeans":
+            print("Initialization with KMeans")
+            verbose = 0 if self.hide_pbar_ else 1
+            self.km_ = KMeans(
+                self.n_clusters_, max_iter=self.max_iter_ // 2, verbose=verbose
+            )
+            self.km_.fit(X)
+            initial_centers = self.km_.cluster_centers_
+            print("Initialization finished")
+        else:
+            center_indices = np.random.choice(n_samples, self.n_clusters_)
+            initial_centers = X[center_indices]
+        return initial_centers
+
     def fit(self, X, init_mode="random", num_threads=4):
         """
         Complexity is linear on cluster_size and second degree on n_clusters
@@ -54,19 +85,10 @@ class LocKMeans:
                 iterate for the other self.max_iter_ // 2
         """
         n_samples, n_features = X.shape
-        if init_mode == "kmeans":
-            print("Initialization with KMeans")
-            self.km_ = KMeans(self.n_clusters_, max_iter=self.max_iter_ // 2)
-            self.km_.fit(X)
-            initial_centers = self.km_.cluster_centers_
-            print("Initialization finished")
-        else:
-            center_indices = np.random.choice(n_samples, self.n_clusters_)
-            initial_centers = X[center_indices]
+        self.cluster_centers_ = self.initial_centers(X, init_mode)
         if self.cluster_size_ is None:
             avg_cluster_size = n_samples // self.n_clusters_ + 1
             self.cluster_size_ = np.repeat(avg_cluster_size, self.n_clusters_)
-        self.cluster_centers_ = initial_centers
         self.visited_cluster_through_iterations_ = np.zeros((self.max_iter_, n_samples))
         self.labels_ = np.repeat(-1, X.shape[0])
 
