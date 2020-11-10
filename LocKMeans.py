@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.core.defchararray import replace
 from scipy.spatial.distance import cdist
 from tqdm import tqdm
 from sklearn.cluster import KMeans
@@ -88,9 +89,7 @@ class LocKMeans:
 
         # Retrieve the k-nearest cluster for every sample
         knn_result = index_search.knnQueryBatch(
-            copy_X.astype(np.float32),
-            k=self.truncate_cluster_,
-            num_threads=num_threads,
+            copy_X, k=self.truncate_cluster_, num_threads=num_threads,
         )
         idx_data_centers, dist_data_centers = list(zip(*knn_result))
         idx_data_centers = np.array(idx_data_centers)
@@ -117,15 +116,93 @@ class LocKMeans:
             visited_cluster_through_iteration[point_index] = visited_cluster
 
         # Compute the new centers
-        new_centers = np.zeros_like(self.cluster_centers_)
+        new_centers = self.cluster_centers_.copy()
         for cluster_idx in range(self.n_clusters_):
-            new_centers[cluster_idx] = np.mean(
-                np.array(list_points_in_clusters[cluster_idx]), axis=0
-            )
+            if list_cluster_size[cluster_idx] > 0:
+                new_centers[cluster_idx] = np.mean(
+                    np.array(list_points_in_clusters[cluster_idx]), axis=0
+                )
 
         return new_centers, new_labels, visited_cluster_through_iteration
 
-    def fit(self, X, init_mode="random", num_threads=4):
+    def batch_update_loop(
+        self, copy_X: np.ndarray, batch_size: int, alpha: float, num_threads: int
+    ):
+        # Initialize batch parameters
+        n_samples = copy_X.shape[0]
+        n_batch = n_samples // batch_size
+        batch_cluster_size = self.cluster_size_ // n_batch + 1
+        visited_cluster_through_iteration = np.zeros(n_samples)
+        index_batch_split = np.split(
+            np.random.choice(n_samples, n_batch * batch_size, replace=False), n_batch
+        )
+        cluster_centers = self.cluster_centers_.copy().astype(np.float32)
+
+        new_labels = np.repeat(-1, copy_X.shape[0])
+
+        # Loop over batches
+        for index_batch in index_batch_split:
+            # Define the subset of the batch
+            X_batch = copy_X[index_batch]
+
+            # Definition of the similarity search component
+            index_search = nmslib.init(space="l2")
+            index_search.addDataPointBatch(cluster_centers)
+            index_search.createIndex()
+
+            # Initialize with empty cluster composition
+            list_points_in_clusters = [[] for _ in range(self.n_clusters_)]
+            list_cluster_size = np.zeros(self.n_clusters_)
+
+            # Retrieve the k-nearest cluster for every sample in the batch
+            knn_result = index_search.knnQueryBatch(
+                X_batch, k=self.truncate_cluster_, num_threads=num_threads,
+            )
+            idx_data_centers, dist_data_centers = list(zip(*knn_result))
+            idx_data_centers = np.array(idx_data_centers)
+            dist_data_centers = np.array(dist_data_centers)
+
+            # Retrieve the ordered index of the samples by their minimum distance to a cluster
+            sort_index_data_centers = np.argsort(np.min(dist_data_centers, axis=1))
+
+            # Loop over the points by the order defined above
+            for idx in sort_index_data_centers:
+                point_index = index_batch[idx]
+                # Search a cluster to fit in (ie its the closest
+                # and its maximal size has not been reached)
+                visited_cluster = 0
+                while visited_cluster < self.truncate_cluster_:
+                    cluster_idx = idx_data_centers[idx, visited_cluster]
+                    visited_cluster += 1
+                    if list_cluster_size[cluster_idx] < batch_cluster_size[cluster_idx]:
+                        list_points_in_clusters[cluster_idx].append(copy_X[point_index])
+                        list_cluster_size[cluster_idx] += 1
+                        new_labels[point_index] = cluster_idx
+                        break
+
+                # For monitoring purposes, remember the number of cluster visited to find a fit
+                visited_cluster_through_iteration[point_index] = visited_cluster
+
+            # Compute the new centers
+            new_centers = cluster_centers.copy()
+            for cluster_idx in range(self.n_clusters_):
+                if list_cluster_size[cluster_idx] > 0:
+                    new_centers[cluster_idx] = np.mean(
+                        np.array(list_points_in_clusters[cluster_idx]), axis=0
+                    )
+            cluster_centers = (1 - alpha) * cluster_centers + alpha * new_centers
+
+        return cluster_centers, new_labels, visited_cluster_through_iteration
+
+    def fit(
+        self,
+        X,
+        init_mode="random",
+        fit_mode="total",
+        batch_size=100,
+        alpha=0.5,
+        num_threads=4,
+    ):
         """
         Complexity is linear on cluster_size and second degree on n_clusters
 
@@ -158,51 +235,18 @@ class LocKMeans:
             )
 
         for i in tqdm(range(max_iter), disable=self.hide_pbar_):
-            # # Definition of the similarity search component
-            # index_search = nmslib.init(space="l2")
-            # index_search.addDataPointBatch(self.cluster_centers_.astype(np.float32))
-            # index_search.createIndex()
-
-            # list_points_in_clusters = [[] for _ in range(self.n_clusters_)]
-            # list_cluster_size = [0 for _ in range(self.n_clusters_)]
-            # new_labels = np.repeat(-1, X.shape[0])
-            # knn_result = index_search.knnQueryBatch(
-            #     copy_X.astype(np.float32),
-            #     k=self.truncate_cluster_,
-            #     num_threads=num_threads,
-            # )
-            # idx_data_centers, dist_data_centers = list(zip(*knn_result))
-            # idx_data_centers = np.array(idx_data_centers)
-            # dist_data_centers = np.array(dist_data_centers)
-            # sort_index_data_centers = np.argsort(np.min(dist_data_centers, axis=1))
-            # # idx_data_centers = idx_data_centers[sort_index_data_centers]
-            # # dist_data_centers = dist_data_centers[sort_index_data_centers]
-            # # copy_X = X[sort_index_data_centers]
-            # # original_index = original_index[sort_index_data_centers]
-            # for idx in range(len(dist_data_centers)):
-            #     visited_cluster = 0
-            #     point_index = sort_index_data_centers[idx]
-            #     while visited_cluster < self.truncate_cluster_:
-            #         cluster_idx = idx_data_centers[point_index, visited_cluster]
-            #         visited_cluster += 1
-            #         if list_cluster_size[cluster_idx] < self.cluster_size_[cluster_idx]:
-            #             list_points_in_clusters[cluster_idx].append(copy_X[point_index])
-            #             list_cluster_size[cluster_idx] += 1
-            #             new_labels[point_index] = cluster_idx
-            #             break
-            #     self.visited_cluster_through_iteration_list_[
-            #         i, point_index
-            #     ] = visited_cluster
-            # for cluster_idx in range(self.n_clusters_):
-            #     new_centers[cluster_idx] = np.mean(
-            #         np.array(list_points_in_clusters[cluster_idx]), axis=0
-            #     )
-
-            (
-                new_centers,
-                new_labels,
-                visited_cluster_through_iteration,
-            ) = self.total_update_loop(copy_X, num_threads)
+            if fit_mode == "batch":
+                (
+                    new_centers,
+                    new_labels,
+                    visited_cluster_through_iteration,
+                ) = self.batch_update_loop(copy_X, batch_size, alpha, num_threads)
+            else:
+                (
+                    new_centers,
+                    new_labels,
+                    visited_cluster_through_iteration,
+                ) = self.total_update_loop(copy_X, num_threads)
 
             self.visited_cluster_through_iteration_list_[
                 i
