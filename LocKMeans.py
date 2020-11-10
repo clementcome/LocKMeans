@@ -223,6 +223,7 @@ class LocKMeans:
         batch_size=100,
         alpha=0.5,
         num_threads=4,
+        print_std=False,
     ):
         """
         Complexity is linear on cluster_size and second degree on n_clusters
@@ -273,10 +274,12 @@ class LocKMeans:
                 i
             ] = visited_cluster_through_iteration
 
-            if self.compute_loss_:
-                self.loss_history_[i] = self.compute_std(
-                    new_labels, remove_outlier=False
-                )
+            if self.compute_loss_ or print_std:
+                std = self.compute_std(new_labels, remove_outlier=False)
+                if self.compute_loss_:
+                    self.loss_history_[i] = std
+                if print_std:
+                    print(std)
 
             # If prediction are not changing between 2 iterations, we stop the algorithm
             if (new_labels == self.labels_).all():
@@ -304,10 +307,10 @@ class LocKMeans:
                     list_cluster_size[cluster_idx] += 1
                     labels[point_index] = cluster_idx
                 else:
-                    knn_point = self.index_search_.knnQuery(
+                    idx_nn, _ = self.index_search_.knnQuery(
                         X[point_index], k=self.n_clusters_
                     )
-                    idx_nn, _ = list(zip(*knn_result))
+                    # idx_nn, _ = list(zip(*knn_point))
                     for cluster_idx in idx_nn:
                         if (
                             list_cluster_size[cluster_idx]
